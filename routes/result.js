@@ -9,8 +9,18 @@ const authCustomer = require('../middleware/authCustomer');
 const { bucket, GCS_CONFIG } = require('../config/gcs');
 
 /**
+ * Extract GCS key from a GCS presigned URL.
+ * e.g. "https://storage.googleapis.com/01-cust-info/abc/face/img.jpg?X-Goog-..." → "abc/face/img.jpg"
+ */
+function extractGcsKeyFromUrl(url) {
+    const match = url.match(/^https:\/\/storage\.googleapis\.com\/[^/]+\/(.+?)(\?|$)/);
+    return match ? match[1] : null;
+}
+
+/**
  * Recursively walk an object and collect all GCS keys (strings containing '/').
- * Skips base64 strings, HTTP URLs, hex colors, and empty strings.
+ * Skips base64 strings, hex colors, and empty strings.
+ * Also extracts GCS keys from expired presigned URLs (legacy data).
  */
 function collectGcsKeys(obj, keys = []) {
     if (!obj || typeof obj !== 'object') return keys;
@@ -21,10 +31,15 @@ function collectGcsKeys(obj, keys = []) {
                 val &&
                 val.includes('/') &&
                 !val.startsWith('data:') &&
-                !val.startsWith('http') &&
                 !val.startsWith('#')
             ) {
-                keys.push(val);
+                if (val.startsWith('https://storage.googleapis.com/')) {
+                    // Extract GCS key from presigned URL (legacy data stored as signed URL)
+                    const extracted = extractGcsKeyFromUrl(val);
+                    if (extracted) keys.push(extracted);
+                } else if (!val.startsWith('http')) {
+                    keys.push(val);
+                }
             }
         } else if (Array.isArray(val)) {
             val.forEach(item => {
@@ -33,10 +48,14 @@ function collectGcsKeys(obj, keys = []) {
                         item &&
                         item.includes('/') &&
                         !item.startsWith('data:') &&
-                        !item.startsWith('http') &&
                         !item.startsWith('#')
                     ) {
-                        keys.push(item);
+                        if (item.startsWith('https://storage.googleapis.com/')) {
+                            const extracted = extractGcsKeyFromUrl(item);
+                            if (extracted) keys.push(extracted);
+                        } else if (!item.startsWith('http')) {
+                            keys.push(item);
+                        }
                     }
                 } else if (typeof item === 'object') {
                     collectGcsKeys(item, keys);
