@@ -9,33 +9,42 @@ const authCustomer = require('../middleware/authCustomer');
 const { bucket, GCS_CONFIG } = require('../config/gcs');
 
 /**
- * Recursively walk an object and collect all GCS keys (strings containing '/').
- * Skips base64 strings, HTTP URLs, hex colors, and empty strings.
+ * Extract GCS key from a presigned URL (has ?X-Goog- query params).
+ * Returns null for non-presigned URLs.
+ */
+function extractGcsKey(url) {
+    if (!url.includes('?X-Goog-')) return null;
+    const match = url.match(/^https:\/\/storage\.googleapis\.com\/[^/]+\/(.+?)\?/);
+    return match ? match[1] : null;
+}
+
+/**
+ * Recursively walk an object and collect all GCS keys.
+ * Also extracts keys from expired presigned URLs (legacy DB data).
+ * Skips direct GCS URLs without query params (different buckets, may be public).
  */
 function collectGcsKeys(obj, keys = []) {
     if (!obj || typeof obj !== 'object') return keys;
 
     for (const [key, val] of Object.entries(obj)) {
-        if (typeof val === 'string') {
-            if (
-                val &&
-                val.includes('/') &&
-                !val.startsWith('data:') &&
-                !val.startsWith('http') &&
-                !val.startsWith('#')
-            ) {
+        if (typeof val === 'string' && val && val.includes('/')) {
+            if (val.startsWith('data:') || val.startsWith('#')) {
+                // skip
+            } else if (val.startsWith('https://storage.googleapis.com/') && val.includes('?X-Goog-')) {
+                const extracted = extractGcsKey(val);
+                if (extracted) keys.push(extracted);
+            } else if (!val.startsWith('http')) {
                 keys.push(val);
             }
         } else if (Array.isArray(val)) {
             val.forEach(item => {
-                if (typeof item === 'string') {
-                    if (
-                        item &&
-                        item.includes('/') &&
-                        !item.startsWith('data:') &&
-                        !item.startsWith('http') &&
-                        !item.startsWith('#')
-                    ) {
+                if (typeof item === 'string' && item && item.includes('/')) {
+                    if (item.startsWith('data:') || item.startsWith('#')) {
+                        // skip
+                    } else if (item.startsWith('https://storage.googleapis.com/') && item.includes('?X-Goog-')) {
+                        const extracted = extractGcsKey(item);
+                        if (extracted) keys.push(extracted);
+                    } else if (!item.startsWith('http')) {
                         keys.push(item);
                     }
                 } else if (typeof item === 'object') {
